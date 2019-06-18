@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
@@ -10,6 +12,7 @@ using Nuke.Common.Execution;
 using Nuke.Common.IO;
 using Nuke.Common.ProjectModel;
 using Nuke.Common.Tooling;
+using Nuke.Common.Utilities;
 using Nuke.Common.Utilities.Collections;
 using static Nuke.Common.EnvironmentInfo;
 using static Nuke.Common.IO.FileSystemTasks;
@@ -75,11 +78,14 @@ class Build : NukeBuild
                     Uncompress(buildpackLoc, buildpackDir);
                 }
 
-                StartProcess("powershell", $"{buildpackDir / "bin/supply.bat"} {BuildDirectory} {CacheDirectory} {DepsDirectory} {i}").WaitForExit();
+                var envVars = Environment.GetEnvironmentVariables().Cast<DictionaryEntry>().ToDictionary(x => x.Key.ToString(), x => x.Value.ToString());
+                envVars.Add("CF_STACK","windows");
+                
+                RunLifecycle("supply", buildpackDir, envVars, i);
                 
                 if (i == Buildpacks.Length - 1)
                 {
-                    StartProcess("powershell", $"{buildpackDir / "bin/finalize.bat"} {BuildDirectory} {CacheDirectory} {DepsDirectory} {i} {ProfileDirectory}").WaitForExit();
+                    RunLifecycle("finalize", buildpackDir, envVars, i);
                 }
             }
             EnsureCleanDirectory(DropletDirectory);
@@ -87,6 +93,26 @@ class Build : NukeBuild
             CopyDirectoryRecursively(BuildDirectory, DropletDirectory / "profile.d");
             Logger.Block($"Droplet created in {DropletDirectory}");
         });
+
+    void RunLifecycle(string lifecycle, AbsolutePath buildpackDir, Dictionary<string,string> envVars, int index)
+    {
+        var exePath = buildpackDir / "bin" / $"{lifecycle}.exe";
+        if (FileExists(exePath))
+        {
+            StartProcess(exePath, 
+                    arguments: $"{BuildDirectory} {CacheDirectory} {DepsDirectory} {index} {ProfileDirectory}", 
+                    environmentVariables: envVars)
+                .WaitForExit();
+        }
+        else
+        {
+            StartProcess("powershell", 
+                    arguments: $"{buildpackDir / "bin/finalize.bat"} {BuildDirectory} {CacheDirectory} {DepsDirectory} {index} {ProfileDirectory}", 
+                    environmentVariables: envVars)
+                .WaitForExit();
+        }
+        
+    }
 
     static string GetMd5Hash(string input)
     {
